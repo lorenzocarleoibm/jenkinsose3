@@ -1,18 +1,27 @@
-oc login -u$USER_NAME -p$USER_PASSWD --server=$OSE_SERVER --certificate-authority=$CERT_PATH
+APP_HOSTNAME="myapp.dev.ibmcloud-4541c909052590f055286494a1af3e6a-0000.eu-gb.containers.appdomain.cloud"
+APP_NAME=myapp
+APP_GIT=https://github.com/lorenzocarleoibm/kitchensink.git
+APP_GIT_REF=
+APP_GIT_CONTEXT_DIR=
+USER_NAME=Lorenzo.Carleo@ibm.com
+OSE_SERVER=https://console-openshift-console.ibmcloud-4541c909052590f055286494a1af3e6a-0000.eu-gb.containers.appdomain.cloud
+CERT_PATH=/var/lib/jenkins/secrets/ca.crt
+DEVEL_PROJ_NAME=development
+
+oc login --token=CjYm10a1j7O5VCWHDrlMrrZQXEtc4InKBbcKOXrOumw --server=https://c100-e.eu-gb.containers.cloud.ibm.com:32200
 
 oc project $DEVEL_PROJ_NAME
 
 #Is this a new deployment or an existing app? Decide based on whether the project is empty or not
 #If BuildConfig exists, assume that the app is already deployed and we need a rebuild
 
-BUILD_CONFIG=`oc get bc | tail -1 | awk '{print $1}'`
+#BUILD_CONFIG=`oc get bc | tail -1 | awk '{print $1}'`
 
-if [ -z "$BUILD_CONFIG" -o $BUILD_CONFIG == "NAME" ]; then
+#if [ -z "$BUILD_CONFIG" -o $BUILD_CONFIG == "NAME" ]; then
 
 # no app found so create a new one
   echo "Create a new app"
-  oc new-app --template=eap6-basic-sti -p \
-  APPLICATION_NAME=$APP_NAME,APPLICATION_HOSTNAME=$APP_HOSTNAME,EAP_RELEASE=6.4,GIT_URI=$APP_GIT,GIT_REF=$APP_GIT_REF,GIT_CONTEXT_DIR=$APP_GIT_CONTEXT_DIR\
+  oc new-app --template=eap72-basic-s2i -p APPLICATION_NAME=$APP_NAME APPLICATION_HOSTNAME=$APP_HOSTNAME EAP_RELEASE=7.2 GIT_URI=$APP_GIT GIT_REF=$APP_GIT_REF GIT_CONTEXT_DIR=$APP_GIT_CONTEXT_DIR\
    -l name=$APP_NAME
  
   echo "Find build id"
@@ -32,21 +41,21 @@ if [ -z "$BUILD_CONFIG" -o $BUILD_CONFIG == "NAME" ]; then
     fi 
   done
 
-  if [ $rc -ne 0 ]; then
-    echo "Fail: Build could not be found after maximum attempts"
-    exit 1
-  fi 
-else
+#  if [ $rc -ne 0 ]; then
+#    echo "Fail: Build could not be found after maximum attempts"
+#    exit 1
+#  fi 
+#else
 
-  # Application already exists, just need to start a new build
-  echo "App Exists. Triggering application build and deployment"
-  BUILD_ID=`oc start-build ${BUILD_CONFIG}`
-  
-fi
+#  # Application already exists, just need to start a new build
+#  echo "App Exists. Triggering application build and deployment"
+#  BUILD_ID=`oc start-build ${BUILD_CONFIG}`
+#  
+#fi
 
 echo "Waiting for build to start"
 rc=1
-attempts=25
+attempts=2500
 count=0
 while [ $rc -ne 0 -a $count -lt $attempts ]; do
   status=`oc get build ${BUILD_ID} -t '{{.status.phase}}'`
@@ -79,7 +88,7 @@ oc build-logs $BUILD_ID
 echo "Checking build result status"
 rc=1
 count=0
-attempts=100
+attempts=10000
 while [ $rc -ne 0 -a $count -lt $attempts ]; do
   status=`oc get build ${BUILD_ID} -t '{{.status.phase}}'`
   if [[ $status == "Failed" || $status == "Error" || $status == "Canceled" ]]; then
@@ -106,7 +115,7 @@ fi
 echo "Checking build result status"
 rc=1
 count=0
-attempts=100
+attempts=10000
 while [ $rc -ne 0 -a $count -lt $attempts ]; do
   status=`oc get build ${BUILD_ID} -t '{{.status.phase}}'`
   if [[ $status == "Failed" || $status == "Error" || $status == "Canceled" ]]; then
@@ -140,7 +149,7 @@ echo "Checking for successful test deployment at $HOSTNAME"
 set +e
 rc=1
 count=0
-attempts=100
+attempts=10000
 while [ $rc -ne 0 -a $count -lt $attempts ]; do
   if curl -s --connect-timeout 2 $APP_HOSTNAME >& /dev/null; then
     rc=0
