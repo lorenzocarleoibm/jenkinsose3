@@ -1,47 +1,170 @@
+APP_HOSTNAME="myapp.test.ibmcloud-4541c909052590f055286494a1af3e6a-0000.eu-gb.containers.appdomain.cloud"
+APP_NAME=myapp
+USER_NAME=Lorenzo.Carleo@ibm.com
+OSE_SERVER=https://console-openshift-console.ibmcloud-4541c909052590f055286494a1af3e6a-0000.eu-gb.containers.appdomain.cloud
+CERT_PATH=/var/lib/jenkins/secrets/ca.crt
+DEVEL_PROJ_NAME=development
+
+oc login --token=CjYm10a1j7O5VCWHDrlMrrZQXEtc4InKBbcKOXrOumw --server=https://c100-e.eu-gb.containers.cloud.ibm.com:32200
+
 oc project $DEVEL_PROJ_NAME
 
-IS_NAME=`oc get is| tail -1|awk '{print $1}'`
+#Is this a new deployment or an existing app? Decide based on whether the project is empty or not
+#If BuildConfig exists, assume that the app is already deployed and we need a rebuild
 
-#get full name of the image
-FULL_IMAGE_NAME=`oc describe is ${IS_NAME} | grep -a1 "Tag" | tail -1 | awk '{print $6}'`
+#BUILD_CONFIG=`oc get bc | tail -1 | awk '{print $1}'`
 
-#Tag to promote to QA
-oc tag $FULL_IMAGE_NAME $DEVEL_PROJ_NAME/${IS_NAME}:promote
+#if [ -z "$BUILD_CONFIG" -o $BUILD_CONFIG == "NAME" ]; then
 
+# no app found so create a new one
+  echo "Create a new app"
+  oc new-app --template=eap72-basic-s2i -p APPLICATION_NAME=$APP_NAME APPLICATION_HOSTNAME=$APP_HOSTNAME EAP_RELEASE=7.2 GIT_URI=$APP_GIT GIT_REF=$APP_GIT_REF GIT_CONTEXT_DIR=$APP_GIT_CONTEXT_DIR\
+   -l name=$APP_NAME
+ 
+  echo "Find build id"
+  BUILD_ID=`oc get builds | tail -1 | awk '{print $1}'`
+  rc=1
+  attempts=75
+  count=0
+  while [ $rc -ne 0 -a $count -lt $attempts ]; do
+    BUILD_ID=`oc get builds | tail -1 | awk '{print $1}'`
+    if [ $BUILD_ID == "NAME" ]; then
+      count=$(($count+1))
+      echo "Attempt $count/$attempts"
+      sleep 5
+    else 
+      rc=0
+      echo "Build Id is :" ${BUILD_ID}
+    fi 
+  done
 
-#This should automatically initiate deployment
+#  if [ $rc -ne 0 ]; then
+#    echo "Fail: Build could not be found after maximum attempts"
+#    exit 1
+#  fi 
+#else
 
-oc project $QA_PROJ_NAME
+#  # Application already exists, just need to start a new build
+#  echo "App Exists. Triggering application build and deployment"
+#  BUILD_ID=`oc start-build ${BUILD_CONFIG}`
+#  
+#fi
 
-#Find the DeploymentConfig to see if this is a new deployment or just needs an update
-DC_ID=`oc get dc | tail -1| awk '{print $1}'`
-
-if [ $DC_ID == "NAME" ]; then
-	oc new-app $DEVEL_PROJ_NAME/${IS_NAME}:promote --name=$APP_NAME
-	SVC_ID=`oc get svc | tail -1 | awk '{print $1}'`
-	oc expose service $SVC_ID --hostname=$APP_HOSTNAME
-fi
-
-
-#find the new rc based on the FULL_IMAGE_NAME=$FULL_IMAGE_NAME
-RC_ID=""
-attempts=75
+echo "Waiting for build to start"
+rc=1
+attempts=2500
 count=0
-while [ -z "$RC_ID" -a $count -lt $attempts ]; do
-	RC_ID=`oc get rc | grep $FULL_IMAGE_NAME | awk '{print $1}'`
-	count=$(($count+1))
-	sleep 5
+while [ $rc -ne 0 -a $count -lt $attempts ]; do
+  status=`oc get build ${BUILD_ID} -t '{{.status.phase}}'`
+  if [[ $status == "Failed" || $status == "Error" || $status == "Canceled" ]]; then
+    echo "Fail: Build completed with unsuccessful status: ${status}"
+    exit 1
+  fi
+  if [ $status == "Complete" ]; then
+    echo "Build completed successfully, will test deployment next"
+    rc=0
+  fi
+  
+  if [ $status == "Running" ]; then
+    echo "Build started"
+    rc=0
+  fi
+  
+  if [ $status == "Pending" ]; then
+    count=$(($count+1))
+    echo "Attempt $count/$attempts"
+    sleep 5
+  fi
 done
 
-if [ -z "$RC_ID" ]; then
-  echo "Fail: App deployment was not successful"
-  exit 1 
+# stream the logs for the build that just started
+oc build-logs $BUILD_ID
+
+
+
+echo "Checking build result status"
+rc=1
+count=0
+attempts=10000
+while [ $rc -ne 0 -a $count -lt $attempts ]; do
+  status=`oc get build ${BUILD_ID} -t '{{.status.phase}}'`
+  if [[ $status == "Failed" || $status == "Error" || $status == "Canceled" ]]; then
+    echo "Fail: Build completed with unsuccessful status: ${status}"
+    exit 1
+  fi
+
+  if [ $status == "Complete" ]; then
+    echo "Build completed successfully, will test deployment next"
+    rc=0
+  else 
+    count=$(($count+1))
+    echo "Attempt $count/$attempts"
+    sleep 5
+  fi
+done
+
+if [ $rc -ne 0 ]; then
+    echo "Fail: Build did not complete in a reasonable period of time"
+    exit 1
 fi
 
-#Scale the app to 1 pod (just to make sure)
-scale_result=`oc scale rc $RC_ID --replicas=1| awk '{print $3}'`
 
-if [ $scale_result != "scaled" ]; then
-  echo "Fail: Scaling not successful"
-  exit 1 
+echo "Checking build result status"
+rc=1
+count=0
+attempts=10000
+while [ $rc -ne 0 -a $count -lt $attempts ]; do
+  status=`oc get build ${BUILD_ID} -t '{{.status.phase}}'`
+  if [[ $status == "Failed" || $status == "Error" || $status == "Canceled" ]]; then
+    echo "Fail: Build completed with unsuccessful status: ${status}"
+    exit 1
+  fi
+
+  if [ $status == "Complete" ]; then
+    echo "Build completed successfully, will test deployment next"
+    rc=0
+  else 
+    count=$(($count+1))
+    echo "Attempt $count/$attempts"
+    sleep 5
+  fi
+done
+
+if [ $rc -ne 0 ]; then
+    echo "Fail: Build did not complete in a reasonable period of time"
+    exit 1
 fi
+
+# scale up the test deployment
+RC_ID=`oc get rc | tail -1 | awk '{print $1}'`
+
+echo "Scaling up new deployment $test_rc_id"
+oc scale --replicas=1 rc $RC_ID
+
+
+echo "Checking for successful test deployment at $HOSTNAME"
+set +e
+rc=1
+count=0
+attempts=10000
+while [ $rc -ne 0 -a $count -lt $attempts ]; do
+  if curl -s --connect-timeout 2 $APP_HOSTNAME >& /dev/null; then
+    rc=0
+    break
+  fi
+  count=$(($count+1))
+  echo "Attempt $count/$attempts"
+  sleep 5
+done
+set -e
+
+if [ $rc -ne 0 ]; then
+    echo "Failed to access test deployment, aborting roll out."
+    exit 1
+fi
+
+
+################################################################################
+##Include development test scripts here and fail with exit 1 if the tests fail##
+################################################################################
+ 
